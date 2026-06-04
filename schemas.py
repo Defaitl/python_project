@@ -1,4 +1,4 @@
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, computed_field, Field
 from datetime import datetime
 from models import Status
 class BaseSchema(BaseModel):
@@ -17,13 +17,13 @@ class OutProduct(BaseSchema):
     category : str
     created_at : datetime
 class OrderItemCreate(BaseModel):
-    product_name : str
-    quantity : int
+    product_name: str
+    quantity: int
 class OutOrderItem(BaseSchema):
     product_name: str
     quantity: int
-    product: OutProduct
 class CreateOrder(BaseModel):
+    shop_name: str
     info : str | None = None
     items : list[OrderItemCreate]
 class OutOrder(BaseSchema):
@@ -40,6 +40,9 @@ class OutUser(BaseSchema):
 class UpdatePassword(BaseModel):
     old_password : str
     new_password : str
+class OutOrderWithWarnings(BaseSchema):
+    order: OutOrder
+    warnings: list[str]
 class UpdateUser(BaseModel):
     username : str | None = None
     email : str | None = None
@@ -62,26 +65,14 @@ class OutCategory(BaseSchema):
 class CreateShop(BaseModel):
     name : str
     description : str | None = None
-class OutShop(BaseSchema):
-    name : str
-    is_verified : bool
-    created_at : datetime
-    @computed_field
-    @property
-    def seller_name(self) -> str:
-        return self.seller.username
-class UpdateShop(BaseModel):
-    name : str | None = None
-    description : str | None = None
-class CreateShopProduct(BaseModel):
-    product_name : str
-    shop_name : str
-    quantity : int
-    price : int
-    category_name : str
+class OutShopMin(BaseSchema):
+    name: str
 class OutShopProduct(BaseSchema):
     quantity : int
     price : int
+    product : OutProduct = Field(exclude=True)
+    shop : OutShopMin = Field(exclude=True)
+    category : OutCategory = Field(exclude=True)
     @computed_field
     @property
     def product_name(self) -> str:
@@ -94,6 +85,30 @@ class OutShopProduct(BaseSchema):
     @property
     def category_name(self) -> str:
         return self.category.name
+class OutShopBySeller(BaseSchema):
+    name : str
+    description : str
+    is_verified : bool
+    created_at : datetime
+    seller : OutUser = Field(exclude=True)
+    @computed_field
+    @property
+    def seller_name(self) -> str:
+        return self.seller.username
+    products : list[OutShopProduct]
+class UpdateShop(BaseModel):
+    name : str | None = None
+    description : str | None = None
+class CreateShopProduct(BaseModel):
+    product_name : str
+    shop_name : str
+    quantity : int
+    price : int
+    category_name : str
+class OutShopByUsers(BaseSchema):
+    name : str
+    description : str
+    products : list[OutShopProduct]
 class UpdateShopProduct(BaseModel):
     quantity : int
     price : int
@@ -103,6 +118,8 @@ class OutSellerApplication(BaseSchema):
     text: str
     status: str
     created_at: datetime
+    user: OutUser = Field(exclude=True)
+    reviewer: OutUser | None = Field(default=None, exclude=True)
     @computed_field
     @property
     def user_name(self) -> str:
@@ -112,8 +129,11 @@ class OutSellerApplication(BaseSchema):
     def reviewer_name(self) -> str | None:
         return self.reviewer.username if self.reviewer else None
 class OutModerationRequest(BaseSchema):
+    id : int
     status: str
     created_at: datetime
+    shop: OutShopByUsers = Field(exclude=True)
+    reviewer: OutUser | None = Field(default=None, exclude=True)
     @computed_field
     @property
     def shop_name(self) -> str:

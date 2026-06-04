@@ -1,4 +1,4 @@
-from schemas import CreateOrder, OutOrder, UpdateOrder
+from schemas import CreateOrder, OutOrder, UpdateOrder, OutOrderWithWarnings
 from fastapi import APIRouter, Depends
 from dependencies import get_order_service
 from services.order_service import OrderService
@@ -9,7 +9,7 @@ from aiokafka import AIOKafkaProducer
 from kafka_utils.producer import get_producer
 router = APIRouter(prefix='/orders', tags=['orders'])
 
-@router.post('', response_model=OutOrder)
+@router.post('', response_model=OutOrderWithWarnings)
 async def create_order(new_order : CreateOrder, token_data : dict = Depends(verify_token), service : OrderService = Depends(get_order_service),producer: AIOKafkaProducer = Depends(get_producer)):
     """
     Создание заказа.

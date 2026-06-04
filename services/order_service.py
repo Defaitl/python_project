@@ -2,6 +2,7 @@ from repositories.order_repo import OrderRepository
 from repositories.shop_prod_repo import ShopProductRepository
 from repositories.user_repo import UserRepository
 from repositories.product_repo import ProductRepository
+from repositories.shop_repo import ShopRepository
 from schemas import CreateOrder, UpdateOrder
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,11 +16,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 class OrderService:
-    def __init__(self,product_repo : ProductRepository,user_repo : UserRepository, order_repo: OrderRepository, shop_product_repo: ShopProductRepository, db: AsyncSession):
+    def __init__(self, product_repo: ProductRepository, user_repo: UserRepository, order_repo: OrderRepository, shop_product_repo: ShopProductRepository, shop_repo: ShopRepository, db: AsyncSession):
         self.order_repo = order_repo
         self.shop_product_repo = shop_product_repo
         self.user_repo = user_repo
         self.product_repo = product_repo
+        self.shop_repo = shop_repo
         self.db = db
     async def _get_order_or_404(self, order_id: int) -> Order:
         """
@@ -30,61 +32,73 @@ class OrderService:
         if not order:
             raise HTTPException(status_code=404, detail='Заказ не найден')
         return order
-    async def create_order(self, user_data : dict, data: CreateOrder,producer: AIOKafkaProducer) -> Order:
+    async def create_order(self, user_data: dict, data: CreateOrder, producer: AIOKafkaProducer) -> dict:
         """
         Создание заказа и списание товаров со склада.
 
         Процесс:
-        1. Создается объект заказа 
-        2. Проверяется наличие каждого товара в базе и его количество на складе.
-        3. Уменьшается количество товара
-        4. Создаются записи OrderItem.
-        5. Данные отправляются в Kafka для уведомлений.
+        1. Ищем магазин по shop_name
+        2. Создается объект заказа
+        3. Проверяется наличие каждого товара в базе и его количество на складе.
+        4. Уменьшается количество товара
+        5. Создаются записи OrderItem.
+        6. Данные отправляются в Kafka для уведомлений.
 
         Args:
             user_data : данные пользователя из токена.
             data : Обьект CreateOrder, содержащий в себе список продуктов, отобранных пользователем.
             producer: взаимодействие с Kafka
-        
+
         Returns:
-            Созданный заказ
-        
+            Созданный заказ + warnings
+
         Raises:
-            HTTPException: 404, товар не найден
-            HTTPException: 400, товара недостаточно
+            HTTPException: 404, магазин не найден
+            HTTPException: 400, ни один товар не прошёл проверку
         """
         try:
+            shop = await self.shop_repo.get_by_shop_name(data.shop_name)
+            if not shop:
+                raise HTTPException(404, f'Магазин {data.shop_name} не найден')
+
             user = await self.user_repo.get_by_id(int(user_data['sub']))
-            order = Order(owner_name=user.username, info=data.info)
+            order = Order(owner_name=user.username, info=data.info, shop_id=shop.id)
             self.db.add(order)
             await self.db.flush()
 
             kafka_items = []
+            warnings = []
 
             for item in data.items:
-                product_in_shop = await self.shop_product_repo.get_by_id(item.shop_product_id)
+                product_in_shop = await self.shop_product_repo.get_one_product_for_seller_by_name(item.product_name, shop.id)
                 if not product_in_shop:
-                    raise HTTPException(404, f'Товар {item.shop_product_id} не найден')
+                    warnings.append(f'Товар "{item.product_name}" не найден в магазине {data.shop_name}')
+                    continue
                 if product_in_shop.quantity < item.quantity:
-                    raise HTTPException(400, f'Недостаточно товара {product_in_shop.name} на складе')
+                    warnings.append(f'Недостаточно товара "{item.product_name}" на складе')
+                    continue
                 product_in_shop.quantity -= item.quantity
-                product = await self.product_repo.get_by_id(product_in_shop.product_id)
                 kafka_items.append({
-                    'product_id' : product_in_shop.id,
-                    'name' : product.name,
-                    'quantity' : item.quantity
+                    'product_id': product_in_shop.id,
+                    'name': item.product_name,
+                    'quantity': item.quantity
                 })
                 order_item = OrderItem(
                     order_id=order.id,
-                    product_name=product.name,
+                    product_name=item.product_name,
                     shop_product_id=product_in_shop.id,
                     quantity=item.quantity
                 )
                 self.db.add(order_item)
+
+            if not kafka_items:
+                raise HTTPException(400, 'Ни один товар не прошёл проверку')
+
             await self.db.commit()
         except Exception:
             await self.db.rollback()
             raise
+
         query = (
             select(Order)
             .where(Order.id == order.id)
@@ -94,16 +108,18 @@ class OrderService:
         )
         result = await self.db.execute(query)
         order = result.scalar_one()
+
         try:
             await send_order_event(
-                order_id = order.id,
-                user_id = user_data['sub'],
-                items = kafka_items,
+                order_id=order.id,
+                user_id=user_data['sub'],
+                items=kafka_items,
                 producer=producer
             )
         except Exception as e:
             logger.error(f'Kafka недоступна, событие для заказа {order.id} потеряно. {e}')
-        return order
+
+        return {'order': order, 'warnings': warnings}
     async def get_all_orders(self, data : dict) -> list[Order]:
         """
         Получение  информации обо всех заказов пользователя.
