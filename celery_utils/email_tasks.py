@@ -1,6 +1,7 @@
 import time
 from .celery_app import celery_instance
 @celery_instance.task(name='send_welcome_email')
+
 def send_welcome_email(email : str):
     """
     Отправка приветственного письма пользователю после регистрации.
@@ -38,4 +39,29 @@ def send_order_confirmation(user_id : int, order_id : int, items : list):
         'order_id' : order_id,
         'sent_to_user' : user_id
     }
-
+@celery_instance.task(name='send_application_result')
+def send_application_result(email: str, status : str):
+    """
+    Уведомление пользователя о результате заявки на продавца.
+    """
+    print(f'Начинаю отправку письма на {email}')
+    if status == 'approved':
+        print('Ваша заявка на роль продавца одобрена!')
+    else:
+        print('Ваша заявка на роль продавца отклонена.')
+    time.sleep(2)
+    print(f'Письмо отправлено на {email}')
+    return {'status': 'sent', 'to': email, 'result': status}
+@celery_instance.task(name='send_moderation_result')
+def send_moderation_result(email: str, shop_name: str, status: str):
+    """
+    Уведомление продавца о результате верификации магазина.
+    """
+    print(f'Начинаю отправку письма на {email}')
+    if status == 'approved':
+        print(f'Ваш магазин "{shop_name}" прошёл верификацию и теперь доступен покупателям!')
+    else:
+        print(f'Ваш магазин "{shop_name}" не прошёл верификацию.')
+    time.sleep(2)
+    print(f'Письмо отправлено на {email}')
+    return {'status': 'sent', 'to': email, 'shop': shop_name, 'result': status}
