@@ -5,6 +5,8 @@ from services.redis_service import redis_service
 from datetime import datetime, timezone
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid
+from jose import jwt
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +30,28 @@ class LogMiddleware(BaseHTTPMiddleware):
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """
-        Ограничение частоты запросов по IP-адресу (RATE LIMITING).
+        Ограничение частоты запросов по user_id (если авторизован) или по IP.
         """
         if any(request.url.path.startswith(path) for path in EXCLUDED_PATHS):
             return await call_next(request)
-        ip = request.client.host
-        key = f'rate_limit:{ip}'
-        now = datetime.now(timezone.utc).timestamp() 
-        window_start = now - 30
+
+        key_id = request.client.host  # fallback на IP
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            try:
+                token = auth_header.split(' ')[1]
+                data = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+                key_id = f"user:{data.get('sub')}"
+            except Exception:
+                pass  # токен невалидный — используем IP
+
+        key = f'rate_limit:{key_id}'
+        now = datetime.now(timezone.utc).timestamp()
+        window_start = now - WINDOW
         member = str(uuid.uuid4())
         try:
-            await redis_service.redis_client.zremrangebyscore(key, 0 , window_start)
-            await redis_service.redis_client.zadd(key, {member : now})
+            await redis_service.redis_client.zremrangebyscore(key, 0, window_start)
+            await redis_service.redis_client.zadd(key, {member: now})
             result = await redis_service.redis_client.zcard(key)
             if result > LIMIT:
                 return JSONResponse(status_code=429, content={'detail': 'Слишком много запросов. Подождите 30 секунд.'})

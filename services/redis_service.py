@@ -2,6 +2,7 @@ import redis.asyncio as redis
 from config import settings
 from datetime import datetime, timezone
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -88,4 +89,19 @@ class RedisService:
         now = datetime.now(timezone.utc)
         end = now.replace(hour=23, minute=59, second=59, microsecond=0)
         return int(end.timestamp())
+    async def get_categories_with_redis(self):
+        return await self.redis_client.smembers('categories')
+    async def set_categorites_with_redis(self, categories : list):
+        await self.redis_client.sadd('categories', *categories)
+        await self.redis_client.expire('categories', 3600)
+    async def clear_redis_key(self,key : str):
+        await self.redis_client.delete(key)
+    async def get_products_for_shop_with_redis(self, shop_name : int):
+        return await self.redis_client.get(f'products_by_{shop_name}')
+    async def set_products_for_shop_with_redis(self, shop_name : int, products : list):
+        await self.redis_client.setex(f'products_by_{shop_name}',3600, json.dumps(products))
+
+
+
+
 redis_service = RedisService()
