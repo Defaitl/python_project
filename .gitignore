@@ -13,3 +13,4 @@ env/
 .coverage
 sandbox.py
 .htpassswd
+CLAUDE.md
